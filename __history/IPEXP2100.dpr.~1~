@@ -1,0 +1,14 @@
+program IPEXP2100;
+
+uses
+  Forms,
+  IPEXP2101 in 'IPEXP2101.pas' {Form1};
+
+{$R *.res}
+
+begin
+  Application.Initialize;
+  Application.MainFormOnTaskbar := True;
+  Application.CreateForm(TForm1, Form1);
+  Application.Run;
+end.

@@ -1,0 +1,18 @@
+program IPEXP2100;
+
+uses
+  Forms,
+  IPEXP2101 in 'IPEXP2101.pas' {Form1},
+  DATAMODULE in '..\..\DRLIB\DATAMODULE\DATAMODULE.PAS' {DoctorDM: TDataModule},
+  BASE in '..\..\DRLIB\COMMON\BASE.PAS' {FrmBase};
+
+{$R *.res}
+
+begin
+  Application.Initialize;
+  Application.MainFormOnTaskbar := True;
+  Application.CreateForm(TForm1, Form1);
+  Application.CreateForm(TDoctorDM, DoctorDM);
+  Application.CreateForm(TFrmBase, FrmBase);
+  Application.Run;
+end.
