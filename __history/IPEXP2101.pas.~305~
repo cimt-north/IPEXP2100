@@ -920,11 +920,6 @@ var
   IsUnmanProcess: Boolean;
   CurrentValVar: OleVariant;
 
-  // ✅ เพิ่มตัวแปรสำหรับการแปลงหน่วยเวลา (Minutes -> HH.MM)
-  ConvRow, d, c_idx: Integer;
-  dVal, dHours, dMins: Double;
-  sVal: string;
-
   // --------------------------------------------------------------------------
   // Helper: อ่านค่าจาก RAM (เร็วมาก)
   // --------------------------------------------------------------------------
@@ -1010,7 +1005,7 @@ begin
       DateMaps := BuildDateMapping(WS, AYear);
 
       // ======================================================================
-      // ������ FAST READ: อ่านข้อมูลทั้ง Sheet เข้ามาใน RAM ครั้งเดียว
+      // ���่านข้อมูลทั้ง Sheet เ
       // ======================================================================
       LastRow := WS.Cells.SpecialCells(11).Row; // xlCellTypeLastCell
       if LastRow < 5000 then LastRow := 5000;   // เผื่อไว้
@@ -1035,7 +1030,7 @@ begin
         DataRange[BlockStartRow + 10, 4] := RowData.DEADLINE;
         DataRange[BlockStartRow + 11, 4] := RowData.ItemCD;
         
-      // --- วนลูป Data เพื่อหยอดค่า (Man/Unman เป็นหน่วยนาที) ลง RAM ---
+      // --- วนลูป Data เพื่อหยอดค่า (Man/Unman) ลง RAM ---
         for k := 0 to FWorkDataCount - 1 do
         begin
             if Trim(FWorkData[k].SEIZONO) <> SeizoKey then Continue;
@@ -1045,6 +1040,7 @@ begin
             
             // หาพิกัด
             TargetRow := GetProcessRow_Fast(BlockStartRow, ProcName);
+
             TargetCol := GetDateCol(FWorkData[k].WorkDate);
 
             if (TargetRow > 0) and (TargetCol > 0) then
@@ -1061,7 +1057,6 @@ begin
 
                if ValueToWrite > 0 then
                begin
-                 // สะสมค่าเป็น "นาที" ไปก่อน
                  try
                    CurrentValVar := DataRange[TargetRow, TargetCol];
                    if VarIsNumeric(CurrentValVar) then CurrentValDouble := CurrentValVar
@@ -1081,50 +1076,12 @@ begin
             end;
         end;
 
-        // ====================================================================
-        // ✅ NEW: วนลูปแปลงค่าใน Block นี้จาก "นาที" เป็น "ชั่วโมง.นาที" (HH.MM)
-        // ====================================================================
-        ConvRow := BlockStartRow;
-        while True do
-        begin
-           if ConvRow > VarArrayHighBound(DataRange, 1) then Break;
-           
-           // เช็คขอบเขตของ Block นี้ (ถ้าเจอขีด คือจบ Block)
-           sVal := GetVal(ConvRow, 2);
-           if (ConvRow > BlockStartRow) and ((sVal = '-') or (sVal = '－')) then Break;
-
-           // วนลูปทุกคอลัมน์วันที่
-           for d := 0 to High(DateMaps) do
-           begin
-              c_idx := DateMaps[d].ColIndex;
-              CurrentValVar := DataRange[ConvRow, c_idx];
-              
-              // ถ้ามีค่าตัวเลข > 0 (ซึ่งคือนาทีรวม) ให้แปลง
-              if not VarIsEmpty(CurrentValVar) and VarIsNumeric(CurrentValVar) then
-              begin
-                 dVal := Double(CurrentValVar);
-                 if dVal > 0 then
-                 begin
-                    // สูตร: ชั่วโมง + (นาที/100)
-                    // ตัวอย่าง: 90 นาที -> 1 + (30/100) = 1.30
-                    dHours := Trunc(dVal / 60);
-                    dMins  := dVal - (dHours * 60);
-                    DataRange[ConvRow, c_idx] := dHours + (dMins / 100.0);
-                 end;
-              end;
-           end;
-           Inc(ConvRow);
-        end;
-        // ====================================================================
-
         Inc(CurrentSeizoIdx);
         BlockStartRow := FindNextBlockStartRow_Fast(BlockStartRow);
       end;
 
       if CurrentSeizoIdx < SeizoList.Count then
          InsertLogData('Warning: Template is full. Remaining items: ' + IntToStr(SeizoList.Count - CurrentSeizoIdx), 1);
-         
-      // เขียนข้อมูลกลับลง Excel
       WS.Range[WS.Cells[1, 1], WS.Cells[LastRow, ColCount]].Value := DataRange;
 
       WB.Save;

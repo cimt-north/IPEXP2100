@@ -695,103 +695,41 @@ begin
 
   // --- Query Data ---
   qLog.Close;
- qLog.SQL.Text :=
-    'SELECT * FROM (' +
-      '(' +
-        // --- 1. First Part (Medium Process) ---
-        'SELECT ' +
-        '  MIN(kk.KMSEQNO) AS KMSEQNO, ' +
-        '  kk.SEIZONO, ' +
-        '  sz.hinnm1, ' +
-        '  sz.hinnm2, ' +
-        '  sz.HINSYUCD AS "Item CD", ' +
-        '  MIN(sz.KNOUKIYMD) AS "DEADLINE", ' +
-        '  s.SEIZOKBNNM AS "Mfg Classific", ' +
-        '  ktk.CYUNITEICD AS "Process", ' +
-        '  COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE)) AS "Work Date", ' +
-
-        // Calculate MAN (Removed / 60)
-        '  SUM(CASE ' +
-        '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.YUJINFUKA, 0)) ' +
-        '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmaedanh, 0) + NVL(js.jyujinh, 0) + NVL(js.jatodanh, 0)) ' +
-        '    ELSE 0 ' +
-        '  END) AS "MAN", ' +
-
-        // Calculate UNMAN (Removed / 60)
-        '  SUM(CASE ' +
-        '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.MUJINFUKA, 0)) ' +
-        '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmujinh, 0)) ' +
-        '    ELSE 0 ' +
-        '  END) AS "UNMAN" ' +
-
-        'FROM keikakumst kk ' +
-        '  LEFT JOIN keikakuopt ko ON kk.KMSEQNO = ko.KMSEQNO ' +
-        '  LEFT JOIN jisekidata js ON js.KMSEQNO = kk.KMSEQNO ' +
-        '  LEFT JOIN FUKADATA f ON f.KMSEQNO = kk.KMSEQNO ' +
-        '  LEFT JOIN kouteikmst ktk ON ktk.KEIKOTEICD = kk.keikoteicd ' +
-        '  LEFT JOIN kouteicmst kc ON kc.CYUNITEICD = ktk.CYUNITEICD ' +
-        '  LEFT JOIN seizomst sz ON kk.seizono = sz.seizono ' +
-        '  LEFT JOIN SEIZOKBNMST s ON sz.SEIZOKBN = s.SEIZOKBN ' +
-
-        'WHERE sz.kanryoymd IS NULL ' +
-        '  AND ktk.CYUNITEICD IS NOT NULL ' +
-        '  AND (TRUNC(f.fukaymd) IS NOT NULL OR TRUNC(js.YMDE) IS NOT NULL) ' +
-
-        'GROUP BY ' +
-        '  kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, ' +
-        '  s.SEIZOKBNNM, ktk.CYUNITEICD, COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE))' +
-      ') ' +
-
-      'UNION ALL ' +
-
-      '(' +
-        // --- 2. Second Part (Union) ---
-        'SELECT ' +
-        '  MIN(kk.KMSEQNO) AS KMSEQNO, ' +
-        '  kk.SEIZONO, ' +
-        '  sz.hinnm1, ' +
-        '  sz.hinnm2, ' +
-        '  sz.HINSYUCD AS "Item CD", ' +
-        '  MIN(sz.KNOUKIYMD) AS "DEADLINE", ' +
-        '  s.SEIZOKBNNM AS "Mfg Classific", ' +
-        '  kc.bikou AS "Process", ' +
-        '  COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE)) AS "Work Date", ' +
-
-        // Calculate MAN (Removed / 60)
-        '  SUM(CASE ' +
-        '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.YUJINFUKA, 0)) ' +
-        '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmaedanh, 0) + NVL(js.jyujinh, 0) + NVL(js.jatodanh, 0)) ' +
-        '    ELSE 0 ' +
-        '  END) AS "MAN", ' +
-
-        // Calculate UNMAN (Removed / 60)
-        '  SUM(CASE ' +
-        '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.MUJINFUKA, 0)) ' +
-        '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmujinh, 0)) ' +
-        '    ELSE 0 ' +
-        '  END) AS "UNMAN" ' +
-
-        'FROM keikakumst kk ' +
-        '  LEFT JOIN keikakuopt ko ON kk.KMSEQNO = ko.KMSEQNO ' +
-        '  LEFT JOIN jisekidata js ON js.KMSEQNO = kk.KMSEQNO ' +
-        '  LEFT JOIN FUKADATA f ON f.KMSEQNO = kk.KMSEQNO ' +
-        '  LEFT JOIN kouteikmst ktk ON ktk.KEIKOTEICD = kk.keikoteicd ' +
-        '  LEFT JOIN kouteicmst kc ON kc.CYUNITEICD = ktk.CYUNITEICD ' +
-        '  LEFT JOIN seizomst sz ON kk.seizono = sz.seizono ' +
-        '  LEFT JOIN SEIZOKBNMST s ON sz.SEIZOKBN = s.SEIZOKBN ' +
-
-        'WHERE sz.kanryoymd IS NULL ' +
-        '  AND ktk.CYUNITEICD IS NOT NULL ' +
-        '  AND (TRUNC(f.fukaymd) IS NOT NULL OR TRUNC(js.YMDE) IS NOT NULL) ' +
-        '  AND kc.bikou IS NOT NULL ' +
-
-        'GROUP BY ' +
-        '  kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, ' +
-        '  s.SEIZOKBNNM, ktk.CYUNITEICD, COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE))' +
-      ')' +
-    ') ' +
-    'WHERE TRIM(UPPER("Process")) IN (' + InList + ') ' +
-    '  AND TO_CHAR("Work Date", ''YYYY'') = ' + QuotedStr(YearStr) + ' ' +
+  qLog.SQL.Text :=
+    'SELECT * FROM ((' +
+    // Medium Process part...
+    'SELECT MIN(kk.KMSEQNO) AS KMSEQNO, kk.SEIZONO, sz.hinnm1, sz.hinnm2, sz.HINSYUCD AS "Item CD", ' +
+    'MIN(sz.KNOUKIYMD) AS "DEADLINE", s.SEIZOKBNNM AS "Mfg Classific", ' +
+    'ktk.CYUNITEICD AS "Process", ' +
+    'COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE)) AS "Work Date", ' +
+    'SUM(CASE WHEN f.fukaymd IS NOT NULL THEN (NVL(f.YUJINFUKA, 0) / 60) ' +
+    'WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN ((NVL(js.jmaedanh, 0) + NVL(js.jyujinh, 0) + NVL(js.jatodanh, 0)) / 60) ELSE 0 END) AS "MAN", ' +
+    'SUM(CASE WHEN f.fukaymd IS NOT NULL THEN (NVL(f.MUJINFUKA, 0) / 60) ' +
+    'WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmujinh, 0) / 60) ELSE 0 END) AS "UNMAN" ' +
+    'FROM keikakumst kk LEFT JOIN keikakuopt ko ON kk.KMSEQNO = ko.KMSEQNO ' +
+    'LEFT JOIN jisekidata js ON js.KMSEQNO = kk.KMSEQNO LEFT JOIN FUKADATA f ON f.KMSEQNO = kk.KMSEQNO ' +
+    'LEFT JOIN kouteikmst ktk ON ktk.KEIKOTEICD = kk.keikoteicd LEFT JOIN kouteicmst kc ON kc.CYUNITEICD = ktk.CYUNITEICD ' +
+    'LEFT JOIN seizomst sz ON kk.seizono = sz.seizono LEFT JOIN SEIZOKBNMST s ON sz.SEIZOKBN = s.SEIZOKBN ' +
+    'WHERE sz.kanryoymd IS NULL AND ktk.CYUNITEICD IS NOT NULL AND (TRUNC(f.fukaymd) IS NOT NULL OR TRUNC(js.YMDE) IS NOT NULL) ' +
+    'GROUP BY kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, s.SEIZOKBNNM, ktk.CYUNITEICD, COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE))) ' +
+    'UNION ALL ' +
+    '(SELECT MIN(kk.KMSEQNO) AS KMSEQNO, kk.SEIZONO, sz.hinnm1, sz.hinnm2, sz.HINSYUCD AS "Item CD", ' +
+    'MIN(sz.KNOUKIYMD) AS "DEADLINE", s.SEIZOKBNNM AS "Mfg Classific", ' +
+    'kc.bikou AS "Process", ' +
+    'COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE)) AS "Work Date", ' +
+    'SUM(CASE WHEN f.fukaymd IS NOT NULL THEN (NVL(f.YUJINFUKA, 0) / 60) ' +
+    'WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN ((NVL(js.jmaedanh, 0) + NVL(js.jyujinh, 0) + NVL(js.jatodanh, 0)) / 60) ELSE 0 END) AS "MAN", ' +
+    'SUM(CASE WHEN f.fukaymd IS NOT NULL THEN (NVL(f.MUJINFUKA, 0) / 60) ' +
+    'WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmujinh, 0) / 60) ELSE 0 END) AS "UNMAN" ' +
+    'FROM keikakumst kk LEFT JOIN keikakuopt ko ON kk.KMSEQNO = ko.KMSEQNO ' +
+    'LEFT JOIN jisekidata js ON js.KMSEQNO = kk.KMSEQNO LEFT JOIN FUKADATA f ON f.KMSEQNO = kk.KMSEQNO ' +
+    'LEFT JOIN kouteikmst ktk ON ktk.KEIKOTEICD = kk.keikoteicd LEFT JOIN kouteicmst kc ON kc.CYUNITEICD = ktk.CYUNITEICD ' +
+    'LEFT JOIN seizomst sz ON kk.seizono = sz.seizono LEFT JOIN SEIZOKBNMST s ON sz.SEIZOKBN = s.SEIZOKBN ' +
+    'WHERE sz.kanryoymd IS NULL AND ktk.CYUNITEICD IS NOT NULL AND (TRUNC(f.fukaymd) IS NOT NULL OR TRUNC(js.YMDE) IS NOT NULL) ' +
+    'AND kc.bikou IS NOT NULL ' +
+    'GROUP BY kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, s.SEIZOKBNNM, ktk.CYUNITEICD, COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE))) ' +
+    ') WHERE TRIM(UPPER("Process")) IN (' + InList + ') ' +
+    'AND TO_CHAR("Work Date", ''YYYY'') = ' + QuotedStr(YearStr) + ' ' +
     'ORDER BY SEIZONO, "Work Date"';
 
   if OutFolder <> '' then SaveIniText(LogFile, 'SQL_LOG', qLog.SQL.Text);
@@ -818,7 +756,7 @@ begin
     on E: Exception do
     begin
       SetLength(FWorkData, 0); FWorkDataCount := 0;
-      if OutFolder <> '' then
+      if OutFolder <> '' then 
         SaveIniText(LogFile, 'ERROR_LOG', qLog.SQL.Text + #13#10 + 'ERROR: ' + E.Message);
       InsertLogData('内部エラー' + E.Message + 'が発生しました', 2);
       MessageDlg('Error loading data from Database.' + #13#10 + 'Reason: ' + E.Message + #13#10 + 'Please check log file.', mtError, [mbOK], 0);
@@ -920,11 +858,6 @@ var
   IsUnmanProcess: Boolean;
   CurrentValVar: OleVariant;
 
-  // ✅ เพิ่มตัวแปรสำหรับการแปลงหน่วยเวลา (Minutes -> HH.MM)
-  ConvRow, d, c_idx: Integer;
-  dVal, dHours, dMins: Double;
-  sVal: string;
-
   // --------------------------------------------------------------------------
   // Helper: อ่านค่าจาก RAM (เร็วมาก)
   // --------------------------------------------------------------------------
@@ -1010,7 +943,7 @@ begin
       DateMaps := BuildDateMapping(WS, AYear);
 
       // ======================================================================
-      // ������ FAST READ: อ่านข้อมูลทั้ง Sheet เข้ามาใน RAM ครั้งเดียว
+      // ���่านข้อมูลทั้ง Sheet เ
       // ======================================================================
       LastRow := WS.Cells.SpecialCells(11).Row; // xlCellTypeLastCell
       if LastRow < 5000 then LastRow := 5000;   // เผื่อไว้
@@ -1035,7 +968,7 @@ begin
         DataRange[BlockStartRow + 10, 4] := RowData.DEADLINE;
         DataRange[BlockStartRow + 11, 4] := RowData.ItemCD;
         
-      // --- วนลูป Data เพื่อหยอดค่า (Man/Unman เป็นหน่วยนาที) ลง RAM ---
+      // --- วนลูป Data เพื่อหยอดค่า (Man/Unman) ลง RAM ---
         for k := 0 to FWorkDataCount - 1 do
         begin
             if Trim(FWorkData[k].SEIZONO) <> SeizoKey then Continue;
@@ -1045,6 +978,7 @@ begin
             
             // หาพิกัด
             TargetRow := GetProcessRow_Fast(BlockStartRow, ProcName);
+
             TargetCol := GetDateCol(FWorkData[k].WorkDate);
 
             if (TargetRow > 0) and (TargetCol > 0) then
@@ -1061,7 +995,6 @@ begin
 
                if ValueToWrite > 0 then
                begin
-                 // สะสมค่าเป็น "นาที" ไปก่อน
                  try
                    CurrentValVar := DataRange[TargetRow, TargetCol];
                    if VarIsNumeric(CurrentValVar) then CurrentValDouble := CurrentValVar
@@ -1081,50 +1014,12 @@ begin
             end;
         end;
 
-        // ====================================================================
-        // ✅ NEW: วนลูปแปลงค่าใน Block นี้จาก "นาที" เป็น "ชั่วโมง.นาที" (HH.MM)
-        // ====================================================================
-        ConvRow := BlockStartRow;
-        while True do
-        begin
-           if ConvRow > VarArrayHighBound(DataRange, 1) then Break;
-           
-           // เช็คขอบเขตของ Block นี้ (ถ้าเจอขีด คือจบ Block)
-           sVal := GetVal(ConvRow, 2);
-           if (ConvRow > BlockStartRow) and ((sVal = '-') or (sVal = '－')) then Break;
-
-           // วนลูปทุกคอลัมน์วันที่
-           for d := 0 to High(DateMaps) do
-           begin
-              c_idx := DateMaps[d].ColIndex;
-              CurrentValVar := DataRange[ConvRow, c_idx];
-              
-              // ถ้ามีค่าตัวเลข > 0 (ซึ่งคือนาทีรวม) ให้แปลง
-              if not VarIsEmpty(CurrentValVar) and VarIsNumeric(CurrentValVar) then
-              begin
-                 dVal := Double(CurrentValVar);
-                 if dVal > 0 then
-                 begin
-                    // สูตร: ชั่วโมง + (นาที/100)
-                    // ตัวอย่าง: 90 นาที -> 1 + (30/100) = 1.30
-                    dHours := Trunc(dVal / 60);
-                    dMins  := dVal - (dHours * 60);
-                    DataRange[ConvRow, c_idx] := dHours + (dMins / 100.0);
-                 end;
-              end;
-           end;
-           Inc(ConvRow);
-        end;
-        // ====================================================================
-
         Inc(CurrentSeizoIdx);
         BlockStartRow := FindNextBlockStartRow_Fast(BlockStartRow);
       end;
 
       if CurrentSeizoIdx < SeizoList.Count then
          InsertLogData('Warning: Template is full. Remaining items: ' + IntToStr(SeizoList.Count - CurrentSeizoIdx), 1);
-         
-      // เขียนข้อมูลกลับลง Excel
       WS.Range[WS.Cells[1, 1], WS.Cells[LastRow, ColCount]].Value := DataRange;
 
       WB.Save;
