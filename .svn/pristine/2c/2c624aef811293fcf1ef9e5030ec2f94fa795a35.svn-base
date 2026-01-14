@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<BorlandProject>
+	<Transactions>
+    <Transaction>2025/12/15 09:33:30.699.dproj,C:\Users\CIMT-North\OneDrive\ドキュメント\RAD Studio\Projects\Project1.dproj=C:\Users\CIMT-North\OneDrive\ドキュメント\RAD Studio\Projects\IPEXP2100.dproj</Transaction>
+    <Transaction>2025/12/15 09:33:53.692.pas,C:\Users\CIMT-North\OneDrive\ドキュメント\RAD Studio\Projects\Unit1.pas=C:\Users\CIMT-North\OneDrive\ドキュメント\RAD Studio\Projects\IPEXP2101.pas</Transaction>
+    <Transaction>2025/12/15 09:33:53.692.dfm,C:\Users\CIMT-North\OneDrive\ドキュメント\RAD Studio\Projects\Unit1.dfm=C:\Users\CIMT-North\OneDrive\ドキュメント\RAD Studio\Projects\IPEXP2101.dfm</Transaction>
+    <Transaction>2025/12/15 09:42:51.487.pas,C:\Users\CIMT-North\OneDrive\ドキュメント\RAD Studio\Projects\IPEXP2101.pas=C:\delphi2007\CIM\IPEXP2100\IPEXP2101.pas</Transaction>
+    <Transaction>2025/12/15 09:42:51.487.dfm,C:\Users\CIMT-North\OneDrive\ドキュメント\RAD Studio\Projects\IPEXP2101.dfm=C:\delphi2007\CIM\IPEXP2100\IPEXP2101.dfm</Transaction>
+    <Transaction>2025/12/15 09:42:53.862.dproj,C:\Users\CIMT-North\OneDrive\ドキュメント\RAD Studio\Projects\IPEXP2100.dproj=C:\delphi2007\CIM\IPEXP2100\IPEXP2100.dproj</Transaction>
+  </Transactions>
+</BorlandProject>
