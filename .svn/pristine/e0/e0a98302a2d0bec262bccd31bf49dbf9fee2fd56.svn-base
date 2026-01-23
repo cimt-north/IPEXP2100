@@ -39,6 +39,7 @@ type
     panTitle: TPanel;
     DRTitle1: TDRTitle;
     panMain: TPanel;
+    stbBase: TDRStatusBar;
     DrImageList: TImageList;
     Database_Log: TUniConnection;
     CoolBar1: TCoolBar;
@@ -57,8 +58,6 @@ type
     File1: TMenuItem;
     Export1: TMenuItem;
     Close1: TMenuItem;
-    stbBase : TStatusBar;
-    Timer1: TTimer;
 
     procedure FormCreate(Sender: TObject);
     procedure FormClose(Sender: TObject; var Action: TCloseAction);
@@ -68,7 +67,6 @@ type
     procedure Close1Click(Sender: TObject);
     procedure Export1Click(Sender: TObject);
     procedure FormShow(Sender: TObject);
-    procedure Timer1Timer(Sender: TObject);
 
   private
     FWorkData: TWorkRowArray;
@@ -85,7 +83,7 @@ type
     function GetPCName: string;
     function GetWindowsUser: string;
     function GetMacAddress: string;
-    function GetLoginUserFromIni: string;
+    function GetLoginUserFromIni: string; 
     
     // Logging
     procedure InsertLogData(const AMsg: string; ALogKbn: Integer); // 0=Info, 1=Warn, 2=Err
@@ -208,16 +206,6 @@ begin
     end;
   finally
     Ini.Free;
-  end;
-end;
-
-procedure TForm1.Timer1Timer(Sender: TObject);
-begin
-  // ตรวจสอบว่ามี Panel ครบตามที่สร้างไว้ไหม (ปกติจะมี 4 ช่องตามโค้ดข้างบน)
-  if StbBase.Panels.Count >= 4 then
-  begin
-    // ช่องสุดท้าย (Index 3) คือช่องเวลา
-    StbBase.Panels[3].Text := FormatDateTime('dd/mm/yyyy hh:nn:ss', Now);
   end;
 end;
 
@@ -546,94 +534,19 @@ end;
 
 procedure TForm1.FormShow(Sender: TObject);
 var
-  CustomBlue: TColor;
-  VerInfoSize, VerValueSize, Dummy: DWORD;
-  VerInfo: Pointer;
-  VerValue: PVSFixedFileInfo;
-  V1, V2, V3, V4: Word;
-  VersionString, FileNameString: string;
-  WSAData: TWSAData;
-  IniFile: TIniFile;
-  filename, DirectDBName, User: string;
+  VerStr, ExeName: string;
 begin
-WSAStartup(MAKEWORD(2, 2), WSAData);
-  try
-    // Panel 0: File Name
-    FileNameString := '' + ExtractFileName(Application.ExeName);
-    with stbBase.Panels.Add do
-    begin
-      Width := 80;
-      Text := FileNameString;
-    end;
+  VerStr := GetAppVersion;
+  ExeName := ExtractFileName(Application.ExeName);
 
-    // Panel 1: Version Info (คำนวณซ้ำตาม Logic เดิมของคุณ)
-    VerInfoSize := GetFileVersionInfoSize(PChar(ParamStr(0)), Dummy);
-    if VerInfoSize > 0 then
-    begin
-      GetMem(VerInfo, VerInfoSize);
-      try
-        if GetFileVersionInfo(PChar(ParamStr(0)), 0, VerInfoSize, VerInfo) then
-        begin
-          if VerQueryValue(VerInfo, '\', Pointer(VerValue), VerValueSize) then
-          begin
-            V1 := HiWord(VerValue^.dwFileVersionMS);
-            V2 := LoWord(VerValue^.dwFileVersionMS);
-            V3 := HiWord(VerValue^.dwFileVersionLS);
-            V4 := LoWord(VerValue^.dwFileVersionLS);
-            VersionString := Format('%d.%d.%d.%d', [V1, V2, V3, V4]);
-          end;
-        end;
-      finally
-        FreeMem(VerInfo, VerInfoSize);
-      end;
-    end
-    else
-    begin
-      VersionString := 'Version not found';
-    end;
+  if VerStr = '' then VerStr := 'バージョン情報なし'; // [JP] No Version Info
 
-    with stbBase.Panels.Add do
-    begin
-      Width := 70;
-      Text := VersionString;
-    end;
-
-    // Panel 2: Localhost / DB Info
-    filename := ExtractFilePath(Application.ExeName) + '/Setup/SetUp.Ini';
-    if FileExists(filename) then
-    begin
-        IniFile := TIniFile.Create(filename);
-        try
-            DirectDBName := IniFile.ReadString('Setting', 'DIRECTDBNAME', '');
-            User := IniFile.ReadString('Setting', 'USERNAME', '');
-            with stbBase.Panels.Add do
-            begin
-              Width := 230;
-              Text := DirectDBName + ':' + User;
-            end;
-        finally
-            IniFile.Free;
-        end;
-    end
-    else
-    begin
-        with stbBase.Panels.Add do
-        begin
-          Width := 230;
-          Text := 'Setup.Ini Not Found';
-        end;
-    end;
-
-    // Panel 3: Time
-    with stbBase.Panels.Add do
-    begin
-      Width := 270;
-    end;
-    Timer1.Interval := 1000;
-    Timer1.Enabled := True;
-    Timer1.OnTimer := Timer1Timer;
-  finally
-    WSACleanup;
+  if stbBase.Panels.Count > 0 then
+    stbBase.Panels[0].Text := ExeName + ' (Ver ' + VerStr + ')'
+  else
+  begin
+    stbBase.SimplePanel := True;
+    stbBase.SimpleText := ExeName + ' (Ver ' + VerStr + ')';
   end;
 end;
 
@@ -812,12 +725,14 @@ begin
         '  ktk.CYUNITEICD AS "Process", ' +
         '  COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE)) AS "Work Date", ' +
 
+        // Calculate MAN (Removed / 60)
         '  SUM(CASE ' +
         '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.YUJINFUKA, 0)) ' +
         '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmaedanh, 0) + NVL(js.jyujinh, 0) + NVL(js.jatodanh, 0)) ' +
         '    ELSE 0 ' +
         '  END) AS "MAN", ' +
 
+        // Calculate UNMAN (Removed / 60)
         '  SUM(CASE ' +
         '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.MUJINFUKA, 0)) ' +
         '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmujinh, 0)) ' +
@@ -839,13 +754,13 @@ begin
 
         'GROUP BY ' +
         '  kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, ' +
-        '  s.SEIZOKBNNM, ktk.CYUNITEICD, COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE))' + 
+        '  s.SEIZOKBNNM, ktk.CYUNITEICD, COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE))' +
       ') ' +
 
       'UNION ALL ' +
 
       '(' +
-
+        // --- 2. Second Part (Union) ---
         'SELECT ' +
         '  MIN(kk.KMSEQNO) AS KMSEQNO, ' +
         '  kk.SEIZONO, ' +
@@ -857,12 +772,14 @@ begin
         '  kc.bikou AS "Process", ' +
         '  COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE)) AS "Work Date", ' +
 
+        // Calculate MAN (Removed / 60)
         '  SUM(CASE ' +
         '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.YUJINFUKA, 0)) ' +
         '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmaedanh, 0) + NVL(js.jyujinh, 0) + NVL(js.jatodanh, 0)) ' +
         '    ELSE 0 ' +
         '  END) AS "MAN", ' +
 
+        // Calculate UNMAN (Removed / 60)
         '  SUM(CASE ' +
         '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.MUJINFUKA, 0)) ' +
         '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmujinh, 0)) ' +
@@ -885,8 +802,8 @@ begin
 
         'GROUP BY ' +
         '  kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, ' +
-        '  s.SEIZOKBNNM, ktk.CYUNITEICD, COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE))' + 
-      ')' + 
+        '  s.SEIZOKBNNM, ktk.CYUNITEICD, COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE))' +
+      ')' +
     ') ' +
     'WHERE TRIM(UPPER("Process")) IN (' + InList + ') ' +
     '  AND TO_CHAR("Work Date", ''YYYY'') = ' + QuotedStr(YearStr) + ' ' +
@@ -1007,18 +924,17 @@ var
   XLApp, WB, WS: OleVariant;
   i, k, BlockStartRow, LastRow, ColCount: Integer;
   TargetRow, TargetCol: Integer;
-
+  
   // ตัวแปรสำหรับ Batch Process
   DataRange: OleVariant; // เก็บข้อมูล Excel ทั้งหน้าใน RAM
-  FormulaRange: OleVariant; // ✅ NEW: For storing formulas from G-J
   RowData: TWorkRow;
-
+  
   // ตัวช่วยจัดกลุ่มข้อมูล
   SeizoList: TStringList;
   CurrentSeizoIdx: Integer;
-
+  
   // ตัวแปร Logic เดิม
-  HeaderString, SeizoKey, ProcName, LastRowStr: string; // ✅ NEW: LastRowStr
+  HeaderString, SeizoKey, ProcName: string;
   DateMaps: TDateMapArray;
   ValueToWrite, CurrentValDouble: Double;
   IsUnmanProcess: Boolean;
@@ -1036,8 +952,8 @@ var
   begin
     try
       // เช็คขอบเขตและค่าว่าง
-      if (Row <= VarArrayHighBound(DataRange, 1)) and
-         (Col <= VarArrayHighBound(DataRange, 2)) and
+      if (Row <= VarArrayHighBound(DataRange, 1)) and 
+         (Col <= VarArrayHighBound(DataRange, 2)) and 
          not VarIsEmpty(DataRange[Row, Col]) then
         Result := Trim(VarToStr(DataRange[Row, Col]))
       else
@@ -1063,7 +979,7 @@ var
     end;
   end;
 
-  // หาบรรทัด Process
+  // หาบรรทัด Process 
   function GetProcessRow_Fast(StartR: Integer; AProc: string): Integer;
   var r: Integer; s: string;
   begin
@@ -1073,7 +989,7 @@ var
       if r > VarArrayHighBound(DataRange, 1) then Break;
       s := GetVal(r, 2);
       if (r > StartR) and ((s = '-') or (s = '－')) then Break;
-
+      
       s := GetVal(r, 5); // Col E = Process Name
       if SameText(s, AProc) then begin Result := r; Exit; end;
     end;
@@ -1110,24 +1026,17 @@ begin
       XLApp.DisplayAlerts := False;
       WB := XLApp.Workbooks.Open(AFileName);
       try WS := WB.Worksheets[SHEET_NAME_JP]; except try WS := WB.Worksheets[SHEET_NAME_EN]; except WB.Close(False); raise Exception.Create('エラー: シートが見つかりません。'); end; end;
-
+      
       DateMaps := BuildDateMapping(WS, AYear);
 
       // ======================================================================
-      // ✅ NEW Optimized Logic
+      // ������ FAST READ: อ่านข้อมูลทั้ง Sheet เข้ามาใน RAM ครั้งเดียว
       // ======================================================================
       LastRow := WS.Cells.SpecialCells(11).Row; // xlCellTypeLastCell
-      if LastRow < 5000 then LastRow := 5000;
-      LastRowStr := IntToStr(LastRow);
-      ColCount := 200;
-
-      // 1. Capture formulas from G-J in one block
-      FormulaRange := WS.Range['G1:J' + LastRowStr].Formula;
-
-      // 2. Read all values for processing
+      if LastRow < 5000 then LastRow := 5000;   // เผื่อไว้
+      ColCount := 200; 
+      // DataRange เป็น Variant Array (1-based index)
       DataRange := WS.Range[WS.Cells[1, 1], WS.Cells[LastRow, ColCount]].Value;
-
-      // ======================================================================
 
       BlockStartRow := 5;
       CurrentSeizoIdx := 0;
@@ -1145,7 +1054,7 @@ begin
         DataRange[BlockStartRow + 9,  4] := RowData.MfgClassific;
         DataRange[BlockStartRow + 10, 4] := RowData.DEADLINE;
         DataRange[BlockStartRow + 11, 4] := RowData.ItemCD;
-
+        
       // --- วนลูป Data เพื่อหยอดค่า (Man/Unman เป็นหน่วยนาที) ลง RAM ---
         for k := 0 to FWorkDataCount - 1 do
         begin
@@ -1153,7 +1062,7 @@ begin
             if YearOfDT(FWorkData[k].WorkDate) <> AYear then Continue;
 
             ProcName := Trim(FWorkData[k].MeduimProcess);
-
+            
             // หาพิกัด
             TargetRow := GetProcessRow_Fast(BlockStartRow, ProcName);
             TargetCol := GetDateCol(FWorkData[k].WorkDate);
@@ -1187,19 +1096,19 @@ begin
             end
             else
             begin
-               if (TargetRow = 0) and (ProcName <> '') then
+               if (TargetRow = 0) and (ProcName <> '') then 
                   InsertLogData('工程が見つかりません: ' + ProcName, 1);
             end;
         end;
 
         // ====================================================================
-        // ✅ วนลูปแปลงค่าใน Block นี้จาก "นาที" เป็น "ชั่วโมง.นาที" (HH.MM)
+        // ✅ NEW: วนลูปแปลงค่าใน Block นี้จาก "นาที" เป็น "ชั่วโมง.นาที" (HH.MM)
         // ====================================================================
         ConvRow := BlockStartRow;
         while True do
         begin
            if ConvRow > VarArrayHighBound(DataRange, 1) then Break;
-
+           
            // เช็คขอบเขตของ Block นี้ (ถ้าเจอขีด คือจบ Block)
            sVal := GetVal(ConvRow, 2);
            if (ConvRow > BlockStartRow) and ((sVal = '-') or (sVal = '－')) then Break;
@@ -1209,7 +1118,7 @@ begin
            begin
               c_idx := DateMaps[d].ColIndex;
               CurrentValVar := DataRange[ConvRow, c_idx];
-
+              
               // ถ้ามีค่าตัวเลข > 0 (ซึ่งคือนาทีรวม) ให้แปลง
               if not VarIsEmpty(CurrentValVar) and VarIsNumeric(CurrentValVar) then
               begin
@@ -1235,12 +1144,9 @@ begin
       if CurrentSeizoIdx < SeizoList.Count then
          // [JP] Warning: Template is full
          InsertLogData('警告: テンプレートがいっぱいです。残り件数: ' + IntToStr(SeizoList.Count - CurrentSeizoIdx), 1);
-
-      // 4. Write modified values back in one block
+         
+      // เขียนข้อมูลกลับลง Excel
       WS.Range[WS.Cells[1, 1], WS.Cells[LastRow, ColCount]].Value := DataRange;
-
-      // 5. (NEW) Restore formulas to G-J in one block
-      WS.Range['G1:J' + LastRowStr].Formula := FormulaRange;
 
       WB.Save;
       WB.Close(False);
