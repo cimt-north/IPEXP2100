@@ -886,7 +886,7 @@ begin
         '  MIN(sz.KNOUKIYMD) AS "DEADLINE", ' +
         '  s.SEIZOKBNNM AS "Mfg Classific", ' +
         '  ktk.CYUNITEICD AS "Process", ' +
-        '  COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE)) AS "Work Date", ' +
+        '  TRUNC(js.YMDE) AS "Work Date", ' +
 
         '  SUM(CASE ' +
         '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.YUJINFUKA, 0)) ' +
@@ -916,7 +916,7 @@ begin
 
         'GROUP BY ' +
         '  kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, ' +
-        '  s.SEIZOKBNNM, ktk.CYUNITEICD, COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE))' + 
+        '  s.SEIZOKBNNM, ktk.CYUNITEICD, TRUNC(js.YMDE)' +
       ') ' +
 
       'UNION ALL ' +
@@ -932,7 +932,7 @@ begin
         '  MIN(sz.KNOUKIYMD) AS "DEADLINE", ' +
         '  s.SEIZOKBNNM AS "Mfg Classific", ' +
         '  kc.bikou AS "Process", ' +
-        '  COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE)) AS "Work Date", ' +
+        '  TRUNC(js.YMDE) AS "Work Date", ' +
 
         '  SUM(CASE ' +
         '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.YUJINFUKA, 0)) ' +
@@ -963,12 +963,12 @@ begin
 
         'GROUP BY ' +
         '  kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, ' +
-        '  s.SEIZOKBNNM, ktk.CYUNITEICD, COALESCE(TRUNC(f.fukaymd), TRUNC(js.YMDE))' + 
+        '  s.SEIZOKBNNM, ktk.CYUNITEICD,  TRUNC(js.YMDE)' +
       ')' + 
     ') ' +
     'WHERE TRIM(UPPER("Process")) IN (' + InList + ') ' +
     '  AND TO_CHAR("Work Date", ''YYYY'') = ' + QuotedStr(YearStr) + ' ' +
-    'ORDER BY SEIZONO, "Work Date"';
+    'ORDER BY "Item CD","Work Date",SEIZONO';
 
   if OutFolder <> '' then SaveIniText(LogFile, 'SQL_LOG', qLog.SQL.Text);
 
@@ -1077,43 +1077,42 @@ begin
   SetLength(Result, Count);
 end;
 
-// ============================================================================
-//  FillTemplateHeaders (Batch Processing)
-// ============================================================================
 procedure TForm1.FillTemplateHeaders(const AFileName: string; AYear: Integer);
 var
   XLApp, WB, WS: OleVariant;
   i, k, BlockStartRow, LastRow, ColCount: Integer;
   TargetRow, TargetCol: Integer;
 
-  // ตัวแปรสำหรับ Batch Process
-  DataRange: OleVariant; // เก็บข้อมูล Excel ทั้งหน้าใน RAM
+  // Variables for Batch Processing
+  DataRange: OleVariant; // Stores all Excel values in RAM
   FormulaRange: OleVariant; // ✅ NEW: For storing formulas from G-J
   RowData: TWorkRow;
 
-  // ตัวช่วยจัดกลุ่มข้อมูล
+  // Grouping Helpers
   SeizoList: TStringList;
   CurrentSeizoIdx: Integer;
+  CheckList: TStringList; // ✅ Helper list to check for duplicates
+  sKey: string;           // ✅ Temporary key variable
 
-  // ตัวแปร Logic เดิม
+  // Logic Variables
   HeaderString, SeizoKey, ProcName, LastRowStr: string; // ✅ NEW: LastRowStr
   DateMaps: TDateMapArray;
   ValueToWrite, CurrentValDouble: Double;
   IsUnmanProcess: Boolean;
   CurrentValVar: OleVariant;
 
-  // ✅ เพิ่มตัวแปรสำหรับการแปลงหน่วยเวลา (Minutes -> HH.MM)
+  // ✅ Variables for Time Conversion (Minutes -> Decimal Hours)
   ConvRow, d, c_idx: Integer;
   dVal, dHours, dMins: Double;
   sVal: string;
 
   // --------------------------------------------------------------------------
-  // Helper: อ่านค่าจาก RAM (เร็วมาก)
+  // Helper: Read value from RAM (Fast)
   // --------------------------------------------------------------------------
   function GetVal(Row, Col: Integer): string;
   begin
     try
-      // เช็คขอบเขตและค่าว่าง
+      // Check bounds and empty
       if (Row <= VarArrayHighBound(DataRange, 1)) and
          (Col <= VarArrayHighBound(DataRange, 2)) and
          not VarIsEmpty(DataRange[Row, Col]) then
@@ -1128,7 +1127,7 @@ var
   function YearOfDT(const ADT: TDateTime): Integer;
   var Y, M, D: Word; begin if ADT <= 0 then Result := 0 else begin DecodeDate(ADT, Y, M, D); Result := Y; end; end;
 
-  // หาบรรทัดเริ่ม Block (ค้นหาใน RAM)
+  // Find start of next block (Search in RAM)
   function FindNextBlockStartRow_Fast(CurRow: Integer): Integer;
   var r: Integer; s: string;
   begin
@@ -1141,7 +1140,7 @@ var
     end;
   end;
 
-  // หาบรรทัด Process
+  // Find process row
   function GetProcessRow_Fast(StartR: Integer; AProc: string): Integer;
   var r: Integer; s: string;
   begin
@@ -1169,19 +1168,41 @@ var
 
 begin
   if (FWorkDataCount <= 0) then Exit;
-  // 1. จัดเตรียมข้อมูล (Pre-Group Data) เพื่อไม่ต้องวนลูป DB ซ้ำซ้อน
+
+  // 1. Prepare Data (Pre-Group Data)
   SeizoList := TStringList.Create;
+  CheckList := TStringList.Create; // ✅ Create helper list
   try
-    SeizoList.Sorted := True;
-    SeizoList.Duplicates := dupIgnore;
-    // เก็บเฉพาะ Order ที่ปีตรงกับที่เลือก
+    // Set SeizoList (Main list)
+    SeizoList.Sorted := False; // ❌ Do not sort, to keep SQL order
+
+    // Set CheckList (Helper list)
+    CheckList.Sorted := True;      // ✅ Sort helper for fast search
+    CheckList.Duplicates := dupIgnore;
+
+    // Collect only Orders matching the selected year
     for k := 0 to FWorkDataCount - 1 do
     begin
       if YearOfDT(FWorkData[k].WorkDate) = AYear then
-        SeizoList.AddObject(Trim(FWorkData[k].SEIZONO), TObject(k)); // เก็บ Index ตัวอย่างไว้
+      begin
+        sKey := Trim(FWorkData[k].SEIZONO);
+
+        // ✅ Check if this Key has been seen in CheckList
+        // If IndexOf returns -1, it means "not found yet" (first appearance from SQL)
+        if CheckList.IndexOf(sKey) = -1 then
+        begin
+           CheckList.Add(sKey); // Mark as seen
+
+           // Add to Main List (it will append in SQL order)
+           SeizoList.AddObject(sKey, TObject(k));
+        end;
+      end;
     end;
 
-    if SeizoList.Count = 0 then Exit; // ไม่มีข้อมูลปีนี้ จบงาน
+    // Clear helper list as it's no longer needed
+    CheckList.Free;
+
+    if SeizoList.Count = 0 then Exit; // No data for this year, finish task
 
     XLApp := CreateOleObject('Excel.Application');
     try
@@ -1210,12 +1231,13 @@ begin
       BlockStartRow := 5;
       CurrentSeizoIdx := 0;
 
-      // เริ่มวนลูป Block
+      // Start Block Loop
       while (BlockStartRow > 0) and (BlockStartRow < LastRow) do
       begin
-        // ถ้าข้อมูลหมดแล้ว ก็จบ
+        // If data runs out, break
         if CurrentSeizoIdx >= SeizoList.Count then Break;
-         // เขียน Header
+
+        // Write Header
         SeizoKey := SeizoList[CurrentSeizoIdx];
         RowData := FWorkData[Integer(SeizoList.Objects[CurrentSeizoIdx])];
         HeaderString := Trim(SeizoKey + #10 + RowData.HINNM1 + #10 + RowData.HINNM2);
@@ -1224,7 +1246,7 @@ begin
         DataRange[BlockStartRow + 10, 4] := RowData.DEADLINE;
         DataRange[BlockStartRow + 11, 4] := RowData.ItemCD;
 
-      // --- วนลูป Data เพื่อหยอดค่า (Man/Unman เป็นหน่วยนาที) ลง RAM ---
+        // --- Loop Data to fill values (Man/Unman in minutes) into RAM ---
         for k := 0 to FWorkDataCount - 1 do
         begin
             if Trim(FWorkData[k].SEIZONO) <> SeizoKey then Continue;
@@ -1232,13 +1254,13 @@ begin
 
             ProcName := Trim(FWorkData[k].MeduimProcess);
 
-            // หาพิกัด
+            // Find coordinates
             TargetRow := GetProcessRow_Fast(BlockStartRow, ProcName);
             TargetCol := GetDateCol(FWorkData[k].WorkDate);
 
             if (TargetRow > 0) and (TargetCol > 0) then
             begin
-               // Logic เดิม: เช็ค M suffix
+               // Original Logic: Check M suffix
                IsUnmanProcess := False;
                if (Length(ProcName) > 0) and (UpCase(ProcName[Length(ProcName)]) = 'M') then
                begin
@@ -1250,7 +1272,7 @@ begin
 
                if ValueToWrite > 0 then
                begin
-                 // สะสมค่าเป็น "นาที" ไปก่อน
+                 // Accumulate value as "minutes" first
                  try
                    CurrentValVar := DataRange[TargetRow, TargetCol];
                    if VarIsNumeric(CurrentValVar) then CurrentValDouble := CurrentValVar
@@ -1271,34 +1293,33 @@ begin
         end;
 
         // ====================================================================
-        // ✅ วนลูปแปลงค่าใน Block นี้จาก "นาที" เป็น "ชั่วโมง.นาที" (HH.MM)
+        // ✅ Loop to convert values in this Block from "Minutes" to "Decimal Hours" (HH.MM)
         // ====================================================================
         ConvRow := BlockStartRow;
         while True do
         begin
            if ConvRow > VarArrayHighBound(DataRange, 1) then Break;
 
-           // เช็คขอบเขตของ Block นี้ (ถ้าเจอขีด คือจบ Block)
+           // Check Block boundary (if dash found, block ends)
            sVal := GetVal(ConvRow, 2);
            if (ConvRow > BlockStartRow) and ((sVal = '-') or (sVal = '－')) then Break;
 
-           // วนลูปทุกคอลัมน์วันที่
+           // Loop through all date columns
            for d := 0 to High(DateMaps) do
            begin
               c_idx := DateMaps[d].ColIndex;
               CurrentValVar := DataRange[ConvRow, c_idx];
 
-              // ถ้ามีค่าตัวเลข > 0 (ซึ่งคือนาทีรวม) ให้แปลง
+              // If numeric value > 0 (which is total minutes), convert
               if not VarIsEmpty(CurrentValVar) and VarIsNumeric(CurrentValVar) then
               begin
                  dVal := Double(CurrentValVar);
                  if dVal > 0 then
                  begin
-                    // สูตร: ชั่วโมง + (นาที/100)
-                    // ตัวอย่าง: 90 นาที -> 1 + (30/100) = 1.30
-                    dHours := Trunc(dVal / 60);
-                    dMins  := dVal - (dHours * 60);
-                    DataRange[ConvRow, c_idx] := dHours + (dMins / 100.0);
+                    // ✅ Fix formula: Divide by 60 for Decimal Hours
+                    // Example: 615 minutes / 60 = 10.25
+                    // Rounding formula 2 decimal places: Round(Value * 100) / 100
+                    DataRange[ConvRow, c_idx] := Round((dVal / 60.0) * 100) / 100.0;
                  end;
               end;
            end;
@@ -1325,7 +1346,7 @@ begin
     finally
       try XLApp.Quit; except end;
       XLApp := Unassigned; WB := Unassigned; WS := Unassigned;
-      DataRange := Unassigned; // คืน RAM
+      DataRange := Unassigned; // Return RAM
     end;
   finally
     SeizoList.Free;
