@@ -59,6 +59,7 @@ type
     Close1: TMenuItem;
     stbBase : TStatusBar;
     Timer1: TTimer;
+    qMfgNo: TDRQuery;
 
     procedure FormCreate(Sender: TObject);
     procedure FormClose(Sender: TObject; var Action: TCloseAction);
@@ -73,6 +74,7 @@ type
   private
     FWorkData: TWorkRowArray;
     FWorkDataCount: Integer;
+    FCutOffTime: TDateTime;
 
     function IniFileName: string;
     procedure LoadSettings;
@@ -95,9 +97,11 @@ type
     procedure DoExportAll;
     procedure LoadWorkData(AYear: Integer);
     procedure OnCopyInfoClick(Sender: TObject);
-    
+
     procedure FillTemplateHeaders(const AFileName: string; AYear: Integer);
     function BuildDateMapping(const AWS: OleVariant; AYear: Integer): TDateMapArray;
+
+    procedure LoadCutOffTimeSetting;
 
   public
   end;
@@ -139,7 +143,7 @@ type
     function GetCurrentSelection(out ppsi: IUnknown): HRESULT; stdcall;
     function SetFileName(pszName: PWideChar): HRESULT; stdcall;
     function GetFileName(out pszName: PWideChar): HRESULT; stdcall;
-    function SetTitle(pszTitle: PWideChar): HRESULT; stdcall;
+    function SetTitle(pszTitle: PWideChar): HRESULT; stdcall; 
     function SetOkButtonLabel(pszText: PWideChar): HRESULT; stdcall;
     function SetFileNameLabel(pszLabel: PWideChar): HRESULT; stdcall;
     function GetResult(out ppsi: IUnknown): HRESULT; stdcall;
@@ -513,7 +517,7 @@ begin
         '  LOGYMD, LOGKBN, MESSAGE, PGNAME, PGVERSION, MESSAGEID, CONFIRM ' +
         ') VALUES (' +
         '  SYSDATE, :LOGKBN, :MESSAGE, :PGNAME, :PGVERSION, 0, 0)';
-      TempQ.ParamByName('LOGKBN').AsInteger := ALogKbn; 
+      TempQ.ParamByName('LOGKBN').AsInteger := ALogKbn;
       TempQ.ParamByName('MESSAGE').AsString :=  AMsg;
       TempQ.ParamByName('PGNAME').AsString := ExtractFileName(Application.ExeName);
       TempQ.ParamByName('PGVERSION').AsString := GetAppVersion;
@@ -614,6 +618,8 @@ begin
     if Assigned(qLog) then
        AttraConnectDataArea(qLog.Connection);
        
+  LoadCutOffTimeSetting;
+  
     InsertLogData('負荷率表出力(' + GetAppVersion + ')を起動しました', 0);
   except
     // ดัก Error เงียบๆ หรือ ShowMessage ถ้าต้องการ
@@ -803,6 +809,9 @@ var
   XLApp, WB, WS: OleVariant;
   BlobField: TBlobField; BlobStream: TStream; FileStream: TFileStream;
   EList, EUni: TStringList;
+  MasterList: TStringList; // ต้องประกาศตัวแปรนี้เพิ่มด้านบน หรือใช้ใน block นี้
+  ProcName: string;
+  i: Integer;
 
   function SafeStrField(const AName: string): string; begin try Result := Trim(qLog.FieldByName(AName).AsString); except Result := ''; end; end;
   function SafeDateField(const AName: string): TDateTime; begin try if qLog.FieldByName(AName).IsNull then Result := 0 else Result := qLog.FieldByName(AName).AsDateTime; except Result := 0; end; end;
@@ -843,7 +852,7 @@ begin
           except 
             WB.Close(False); 
             // [JP] Sheet not found
-            raise Exception.Create('エラー: テンプレート内にシート "' + '工程' + '" または "' + SHEET_NAME_EN + '" が見つかりません。'); 
+            raise Exception.Create('エラー: テンプレート内にシート "' + '工程' + '" または "' + SHEET_NAME_EN + '" が見つかりません。');
           end; 
         end;
 
@@ -851,15 +860,72 @@ begin
         EUni := MakeUniqueList(EList);
         InList := SqlQuotedList(EUni);
 
+        qMfgNo.Close; // ปิด Query ก่อนเสมอ
+        qMfgNo.SQL.Text := 'SELECT CYUNITEICD as "Process" FROM kouteicmst WHERE CYUNITEICD IS NOT NULL ' +
+                          'UNION ' +
+                          'SELECT BIKOU as "Process" FROM kouteicmst WHERE BIKOU IS NOT NULL';
+        qMfgNo.Open;
+        // ====================================================================
+        // ✅ ส่วนที่เพิ่ม: เปรียบเทียบ InList (จาก Excel) vs MasterList (จาก qMfgNo)
+        // ====================================================================
+
+        MasterList := TStringList.Create;
+        try
+           MasterList.Sorted := True;         // เพื่อความเร็วในการค้นหา
+           MasterList.Duplicates := dupIgnore;
+           MasterList.CaseSensitive := False;
+
+           // 1. อ่านข้อมูลจาก qMfgNo เก็บเข้า MasterList
+           qMfgNo.First;
+           while not qMfgNo.Eof do
+           begin
+             ProcName := Trim(qMfgNo.FieldByName('Process').AsString);
+             if ProcName <> '' then
+               MasterList.Add(ProcName);
+             qMfgNo.Next;
+           end;
+
+           // 2. เช็ค: มีใน InList (Template) แต่ไม่มีใน qMfgNo (Master)
+           // "ตัวไหนมี ใน InList ไม่มีใน Stinglist"
+           if Assigned(EUni) then
+           begin
+             for i := 0 to EUni.Count - 1 do
+             begin
+               ProcName := Trim(EUni[i]);
+               if MasterList.IndexOf(ProcName) = -1 then
+               begin
+                  InsertLogData('計画工程に中工程が設定されていません」のワーニングが発生しません ' + ProcName, 1);
+               end;
+             end;
+           end;
+
+           // 3. เช็ค: มีใน qMfgNo (Master) แต่ไม่มีใน InList (Template)
+           // "ตัวไหนมี ใน Stinglist ไม่มีใน InList"
+           if Assigned(EUni) then
+           begin
+             for i := 0 to MasterList.Count - 1 do
+             begin
+               ProcName := Trim(MasterList[i]);
+               if EUni.IndexOf(ProcName) = -1 then
+               begin
+                  InsertLogData('計画工程の中工程が負荷率表に無い ' + ProcName, 1);
+               end;
+             end;
+           end;
+
+        finally
+           MasterList.Free;
+        end;
+
         WB.Close(False);
       except
         on E: Exception do
         begin
           if not VarIsEmpty(XLApp) then XLApp.Quit;
-          if OutFolder <> '' then 
+          if OutFolder <> '' then
             // [JP] Warning: Failed to read Template
             SaveIniText(LogFile, 'ERROR_LOG', '警告: テンプレートの読み込みに失敗しました。 ' + E.Message);
-          
+
           InsertLogData('内部エラー' + E.Message + 'が発生しました', 2);
           raise;
         end;
@@ -873,102 +939,134 @@ begin
 
   // --- Query Data ---
   qLog.Close;
- qLog.SQL.Text :=
-    'SELECT * FROM (' +
-      '(' +
-        // --- 1. First Part (Medium Process) ---
-        'SELECT ' +
-        '  MIN(kk.KMSEQNO) AS KMSEQNO, ' +
-        '  kk.SEIZONO, ' +
-        '  sz.hinnm1, ' +
-        '  sz.hinnm2, ' +
-        '  sz.HINSYUCD AS "Item CD", ' +
-        '  MIN(sz.KNOUKIYMD) AS "DEADLINE", ' +
-        '  s.SEIZOKBNNM AS "Mfg Classific", ' +
-        '  ktk.CYUNITEICD AS "Process", ' +
-        '  TRUNC(js.YMDE) AS "Work Date", ' +
+qLog.SQL.Text :=
+  'SELECT * FROM ( ' +
 
-        '  SUM(CASE ' +
-        '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.YUJINFUKA, 0)) ' +
-        '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmaedanh, 0) + NVL(js.jyujinh, 0) + NVL(js.jatodanh, 0)) ' +
-        '    ELSE 0 ' +
-        '  END) AS "MAN", ' +
+  '  SELECT ' +
+  '    MIN(kk.KMSEQNO) AS KMSEQNO, ' +
+  '    kk.SEIZONO, ' +
+  '    sz.hinnm1, ' +
+  '    sz.hinnm2, ' +
+  '    sz.HINSYUCD AS "Item CD", ' +
+  '    MIN(sz.KNOUKIYMD) AS "DEADLINE", ' +
+  '    s.SEIZOKBNNM AS "Mfg Classific", ' +
+  '    ktk.CYUNITEICD AS "Process", ' +
+  '    CASE WHEN ko.kanryoflg = ''1'' THEN js.YMDE ELSE TRUNC(f.fukaymd) END AS "Work Date", ' +
 
-        '  SUM(CASE ' +
-        '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.MUJINFUKA, 0)) ' +
-        '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmujinh, 0)) ' +
-        '    ELSE 0 ' +
-        '  END) AS "UNMAN" ' +
+  '    SUM(CASE ' +
+  '      WHEN js.YMDE IS NOT NULL AND ko.kanryoflg = ''1'' ' +
+  '        THEN (NVL(js.jmaedanh,0)+NVL(js.jyujinh,0)+NVL(js.jatodanh,0))/60 ' +
+  '      WHEN f.fukaymd IS NOT NULL ' +
+  '        THEN NVL(f.YUJINFUKA,0)/60 ' +
+  '      ELSE 0 END) AS "MAN", ' +
 
-        'FROM keikakumst kk ' +
-        '  LEFT JOIN keikakuopt ko ON kk.KMSEQNO = ko.KMSEQNO ' +
-        '  LEFT JOIN jisekidata js ON js.KMSEQNO = kk.KMSEQNO ' +
-        '  LEFT JOIN FUKADATA f ON f.KMSEQNO = kk.KMSEQNO ' +
-        '  LEFT JOIN kouteikmst ktk ON ktk.KEIKOTEICD = kk.keikoteicd ' +
-        '  LEFT JOIN kouteicmst kc ON kc.CYUNITEICD = ktk.CYUNITEICD ' +
-        '  LEFT JOIN seizomst sz ON kk.seizono = sz.seizono ' +
-        '  LEFT JOIN SEIZOKBNMST s ON sz.SEIZOKBN = s.SEIZOKBN ' +
+  '    SUM(CASE ' +
+  '      WHEN js.YMDE IS NOT NULL AND ko.kanryoflg = ''1'' ' +
+  '        THEN NVL(js.jmujinh,0)/60 ' +
+  '      WHEN f.fukaymd IS NOT NULL ' +
+  '        THEN GREATEST(0,NVL(f.MUJINFUKA,0)-NVL(f.YUJINFUKA,0))/60 ' +
+  '      ELSE 0 END) AS "UNMAN" ' +
 
-        'WHERE sz.kanryoymd IS NULL ' +
-        '  AND sz.KANSETUKBN = ''0'' ' +
-        '  AND ktk.CYUNITEICD IS NOT NULL ' +
-        '  AND (TRUNC(f.fukaymd) IS NOT NULL OR TRUNC(js.YMDE) IS NOT NULL) ' +
+  '  FROM FUKADATA f ' +
+  '  FULL OUTER JOIN ( ' +
+  '    SELECT ' +
+  '      jd.kmseqno AS js_barcode, ' +
+  '      jd.ymde AS YMDE, ' +
+  '      SUM(jd.jh) AS js_manhour, ' +
+  '      SUM(jd.jmaedanh) AS jmaedanh, ' +
+  '      SUM(jd.jyujinh) AS jyujinh, ' +
+  '      SUM(jd.jatodanh) AS jatodanh, ' +
+  '      SUM(jd.jmujinh) AS jmujinh ' +
+  '    FROM jisekidata jd ' +
+  '    GROUP BY jd.kmseqno, jd.ymde ' +
+  '  ) js ' +
+  '    ON f.kmseqno = js.js_barcode ' +
+  '   AND TRUNC(f.fukaymd) = js.YMDE ' +
 
-        'GROUP BY ' +
-        '  kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, ' +
-        '  s.SEIZOKBNNM, ktk.CYUNITEICD, TRUNC(js.YMDE)' +
-      ') ' +
+  '  INNER JOIN keikakumst kk ' +
+  '    ON (f.kmseqno = kk.kmseqno OR js.js_barcode = kk.kmseqno) ' +
+  '  INNER JOIN keikakuopt ko ON kk.kmseqno = ko.kmseqno ' +
+  '  INNER JOIN kouteikmst ktk ON ktk.KEIKOTEICD = kk.keikoteicd ' +
+  '  INNER JOIN kouteicmst kc ON kc.CYUNITEICD = ktk.CYUNITEICD ' +
+  '  INNER JOIN seizomst sz ON kk.seizono = sz.seizono ' +
+  '  LEFT JOIN SEIZOKBNMST s ON sz.SEIZOKBN = s.SEIZOKBN ' +
 
-      'UNION ALL ' +
+  '  WHERE sz.kanryoymd IS NULL ' +
+  '    AND ktk.CYUNITEICD IS NOT NULL ' +
+  '    AND (TRUNC(f.fukaymd) IS NOT NULL OR TRUNC(js.YMDE) IS NOT NULL) ' +
 
-      '(' +
+  '  GROUP BY ' +
+  '    kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, ' +
+  '    s.SEIZOKBNNM, ktk.CYUNITEICD, ' +
+  '    TRUNC(f.fukaymd), js.YMDE, ' +
+  '    ko.kanryoflg  ' +
 
-        'SELECT ' +
-        '  MIN(kk.KMSEQNO) AS KMSEQNO, ' +
-        '  kk.SEIZONO, ' +
-        '  sz.hinnm1, ' +
-        '  sz.hinnm2, ' +
-        '  sz.HINSYUCD AS "Item CD", ' +
-        '  MIN(sz.KNOUKIYMD) AS "DEADLINE", ' +
-        '  s.SEIZOKBNNM AS "Mfg Classific", ' +
-        '  kc.bikou AS "Process", ' +
-        '  TRUNC(js.YMDE) AS "Work Date", ' +
+  '  UNION ALL ' +
 
-        '  SUM(CASE ' +
-        '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.YUJINFUKA, 0)) ' +
-        '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmaedanh, 0) + NVL(js.jyujinh, 0) + NVL(js.jatodanh, 0)) ' +
-        '    ELSE 0 ' +
-        '  END) AS "MAN", ' +
+  '  SELECT ' +
+  '    MIN(kk.KMSEQNO) AS KMSEQNO, ' +
+  '    kk.SEIZONO, ' +
+  '    sz.hinnm1, ' +
+  '    sz.hinnm2, ' +
+  '    sz.HINSYUCD AS "Item CD", ' +
+  '    MIN(sz.KNOUKIYMD) AS "DEADLINE", ' +
+  '    s.SEIZOKBNNM AS "Mfg Classific", ' +
+  '    kc.bikou AS  "Process", ' +
+  '    CASE WHEN ko.kanryoflg = ''1'' THEN js.YMDE ELSE TRUNC(f.fukaymd) END AS "Work Date",' +
 
-        '  SUM(CASE ' +
-        '    WHEN f.fukaymd IS NOT NULL THEN (NVL(f.MUJINFUKA, 0)) ' +
-        '    WHEN js.YMDE IS NOT NULL AND js.JKBN = ''4'' THEN (NVL(js.jmujinh, 0)) ' +
-        '    ELSE 0 ' +
-        '  END) AS "UNMAN" ' +
+  '    SUM(CASE ' +
+  '      WHEN js.YMDE IS NOT NULL AND ko.kanryoflg = ''1'' ' +
+  '        THEN (NVL(js.jmaedanh,0)+NVL(js.jyujinh,0)+NVL(js.jatodanh,0))/60 ' +
+  '      WHEN f.fukaymd IS NOT NULL ' +
+  '        THEN NVL(f.YUJINFUKA,0)/60 ' +
+  '      ELSE 0 END) AS "MAN", ' +
 
-        'FROM keikakumst kk ' +
-        '  LEFT JOIN keikakuopt ko ON kk.KMSEQNO = ko.KMSEQNO ' +
-        '  LEFT JOIN jisekidata js ON js.KMSEQNO = kk.KMSEQNO ' +
-        '  LEFT JOIN FUKADATA f ON f.KMSEQNO = kk.KMSEQNO ' +
-        '  LEFT JOIN kouteikmst ktk ON ktk.KEIKOTEICD = kk.keikoteicd ' +
-        '  LEFT JOIN kouteicmst kc ON kc.CYUNITEICD = ktk.CYUNITEICD ' +
-        '  LEFT JOIN seizomst sz ON kk.seizono = sz.seizono ' +
-        '  LEFT JOIN SEIZOKBNMST s ON sz.SEIZOKBN = s.SEIZOKBN ' +
+  '    SUM(CASE ' +
+  '      WHEN js.YMDE IS NOT NULL AND ko.kanryoflg = ''1'' ' +
+  '        THEN NVL(js.jmujinh,0)/60 ' +
+  '      WHEN f.fukaymd IS NOT NULL ' +
+  '        THEN GREATEST(0,NVL(f.MUJINFUKA,0)-NVL(f.YUJINFUKA,0))/60 ' +
+  '      ELSE 0 END) AS "UNMAN" ' +
 
-        'WHERE sz.kanryoymd IS NULL ' +
-        '  AND sz.KANSETUKBN = ''0'' ' +
-        '  AND ktk.CYUNITEICD IS NOT NULL ' +
-        '  AND (TRUNC(f.fukaymd) IS NOT NULL OR TRUNC(js.YMDE) IS NOT NULL) ' +
-        '  AND kc.bikou IS NOT NULL ' +
+  '  FROM FUKADATA f ' +
+  '  FULL OUTER JOIN ( ' +
+  '    SELECT ' +
+  '      jd.kmseqno AS js_barcode, ' +
+  '      jd.ymde AS YMDE, ' +
+  '      SUM(jd.jh) AS js_manhour, ' +
+  '      SUM(jd.jmaedanh) AS jmaedanh, ' +
+  '      SUM(jd.jyujinh) AS jyujinh, ' +
+  '      SUM(jd.jatodanh) AS jatodanh, ' +
+  '      SUM(jd.jmujinh) AS jmujinh ' +
+  '    FROM jisekidata jd ' +
+  '    GROUP BY jd.kmseqno, jd.ymde ' +
+  '  ) js ' +
+  '    ON f.kmseqno = js.js_barcode ' +
+  '   AND TRUNC(f.fukaymd) = js.YMDE ' +
 
-        'GROUP BY ' +
-        '  kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, ' +
-        '  s.SEIZOKBNNM, ktk.CYUNITEICD,  TRUNC(js.YMDE)' +
-      ')' + 
-    ') ' +
-    'WHERE TRIM(UPPER("Process")) IN (' + InList + ') ' +
-    '  AND TO_CHAR("Work Date", ''YYYY'') = ' + QuotedStr(YearStr) + ' ' +
-    'ORDER BY "Item CD","Work Date",SEIZONO';
+  '  INNER JOIN keikakumst kk ' +
+  '    ON (f.kmseqno = kk.kmseqno OR js.js_barcode = kk.kmseqno) ' +
+  '  INNER JOIN keikakuopt ko ON kk.kmseqno = ko.kmseqno ' +
+  '  INNER JOIN kouteikmst ktk ON ktk.KEIKOTEICD = kk.keikoteicd ' +
+  '  INNER JOIN kouteicmst kc ON kc.CYUNITEICD = ktk.CYUNITEICD ' +
+  '  INNER JOIN seizomst sz ON kk.seizono = sz.seizono ' +
+  '  LEFT JOIN SEIZOKBNMST s ON sz.SEIZOKBN = s.SEIZOKBN ' +
+
+  '  WHERE sz.kanryoymd IS NULL ' +
+  '    AND ktk.CYUNITEICD IS NOT NULL ' +
+  '    AND kc.bikou IS NOT NULL ' +
+  '    AND (TRUNC(f.fukaymd) IS NOT NULL OR TRUNC(js.YMDE) IS NOT NULL) ' +
+
+  '  GROUP BY ' +
+  '    kk.SEIZONO, kc.bikou, sz.hinnm1, sz.hinnm2, sz.HINSYUCD, ' +
+  '    s.SEIZOKBNNM, ktk.CYUNITEICD, ' +
+  '    TRUNC(f.fukaymd), js.YMDE, ' +
+  '    ko.kanryoflg  ' +
+  ') ' +
+  'WHERE  ' +
+'  TO_CHAR("Work Date",''YYYY'') = ' + QuotedStr(YearStr) + ' ' +
+'ORDER BY "Item CD", "DEADLINE", "Work Date", SEIZONO';
+
 
   if OutFolder <> '' then SaveIniText(LogFile, 'SQL_LOG', qLog.SQL.Text);
 
@@ -998,7 +1096,7 @@ begin
         // [JP] ERROR: ...
         SaveIniText(LogFile, 'ERROR_LOG', qLog.SQL.Text + #13#10 + 'エラー: ' + E.Message);
       InsertLogData('内部エラー' + E.Message + 'が発生しました', 2);
-      
+
       // [JP] Database load error
       MessageDlg('データベースからのデータ読み込みに失敗しました。' + #13#10 + 
                  '原因: ' + E.Message + #13#10 + 
@@ -1017,58 +1115,39 @@ var
   Count, LastMonth: Integer;
   vMonth, vDS, vDE: OleVariant;
 begin
-  { เตรียม array ผลลัพธ์สูงสุด 60 ช่อง }
   SetLength(Result, 60);
   Count := 0;
   LastMonth := 0;
 
-  { คอลัมน์ K = 11 → รวม 60 คอลัมน์ (K ถึง BR) }
   for c := 11 to 11 + 60 - 1 do
   begin
-    { อ่านค่าจาก Excel }
     vMonth := AWS.Cells[2, c];  // row 2 = เดือน
     vDS    := AWS.Cells[3, c];  // row 3 = วันเริ่ม
     vDE    := AWS.Cells[4, c];  // row 4 = วันจบ
 
-    { ---------- Month ---------- }
-    { ถ้ามีค่าเดือน → parse และจำไว้ }
     if not VarIsEmpty(vMonth) then
     begin
-      iMonth := StrToIntDef(
-        Trim(StringReplace(VarToStr(vMonth), '月', '', [rfReplaceAll])),
-        0
-      );
+      iMonth := StrToIntDef(Trim(StringReplace(VarToStr(vMonth), '月', '', [rfReplaceAll])), 0);
       if iMonth > 0 then
-        LastMonth := iMonth;   // ใช้เป็นเดือนล่าสุด
+        LastMonth := iMonth;
     end;
 
-    { ถ้ายังไม่เคยเจอเดือนเลย → ข้าม }
-    if (LastMonth = 0) then
-      Continue;
+    if (LastMonth = 0) then Continue;
 
-    { ---------- Day ---------- }
     iDayStart := StrToIntDef(VarToStr(vDS), 0);
     iDayEnd    := StrToIntDef(VarToStr(vDE), 0);
 
-    { ไม่มีวันเริ่ม → ข้ามคอลัมน์นี้ }
-    if iDayStart <= 0 then
-      Continue;
-    { ---------- Build mapping ---------- }
+    if iDayStart <= 0 then Continue;
+
     Result[Count].ColIndex := c;
 
     try
-      Result[Count].StartDate :=
-        EncodeDate(AYear, LastMonth, iDayStart);
+      Result[Count].StartDate := EncodeDate(AYear, LastMonth, iDayStart);
 
-      { ถ้าวันจบ >= วันเริ่ม → เดือนเดียวกัน }
       if iDayEnd >= iDayStart then
-        Result[Count].EndDate :=
-          EncodeDate(AYear, LastMonth, iDayEnd)
+        Result[Count].EndDate := EncodeDate(AYear, LastMonth, iDayEnd)
       else
-        { คร่อมปลายเดือน (เช่น 28–3) }
-        Result[Count].EndDate :=
-          EncodeDate(AYear, LastMonth, iDayStart)
-          + (iDayEnd - iDayStart);
+        Result[Count].EndDate := EncodeDate(AYear, LastMonth, iDayStart) + (iDayEnd - iDayStart);
     except
       Continue;
     end;
@@ -1077,42 +1156,103 @@ begin
   SetLength(Result, Count);
 end;
 
+// ✅ 2. เพิ่มฟังก์ชันสำหรับอ่านค่าเวลาจาก SETTINGMST
+procedure TForm1.LoadCutOffTimeSetting;
+var
+  TempQ: TDRQuery;
+  SettingStr, TimeStr: string;
+  P: Integer;
+begin
+  // ค่า Default 08:30 เผื่อ Database หาไม่เจอ
+  FCutOffTime := EncodeTime(8, 30, 0, 0);
+
+  TempQ := TDRQuery.Create(nil);
+  try
+    try
+      // ใช้ Connection เดียวกับ qLog หรือ Database_Log
+      if Assigned(qLog) and Assigned(qLog.Connection) then
+        TempQ.Connection := qLog.Connection
+      else if Assigned(Database_Log) then
+        TempQ.Connection := Database_Log;
+
+      if Assigned(TempQ.Connection) and TempQ.Connection.Connected then
+      begin
+        // แก้ชื่อฟิลด์ SETTING_VAL ตามจริงใน DB ของคุณ
+        TempQ.SQL.Text := 'SELECT SETTING FROM SETTINGMST WHERE SETTING LIKE ''DCHGTIME=%''';
+        TempQ.Open;
+
+        if not TempQ.IsEmpty then
+        begin
+          // สมมติค่าใน DB คือ 'DCHGTIME=08:30:00'
+          SettingStr := TempQ.Fields[0].AsString;
+          P := Pos('=', SettingStr);
+          if P > 0 then
+          begin
+            TimeStr := Trim(Copy(SettingStr, P + 1, Length(SettingStr)));
+            FCutOffTime := StrToTimeDef(TimeStr, FCutOffTime);
+          end;
+        end;
+      end;
+    except
+      // ถ้า Error ให้ใช้ค่า Default เงียบๆ
+    end;
+  finally
+    TempQ.Free;
+  end;
+end;
+
+
 procedure TForm1.FillTemplateHeaders(const AFileName: string; AYear: Integer);
 var
   XLApp, WB, WS: OleVariant;
-  i, k, BlockStartRow, LastRow, ColCount: Integer;
+  i, k, BlockStartRow, LastRow, ColCount, NextBlockStartRow: Integer;
   TargetRow, TargetCol: Integer;
 
   // Variables for Batch Processing
-  DataRange: OleVariant; // Stores all Excel values in RAM
-  FormulaRange: OleVariant; // ✅ NEW: For storing formulas from G-J
+  DataRange: OleVariant;
+  FormulaRange: OleVariant;
   RowData: TWorkRow;
 
   // Grouping Helpers
   SeizoList: TStringList;
   CurrentSeizoIdx: Integer;
-  CheckList: TStringList; // ✅ Helper list to check for duplicates
-  sKey: string;           // ✅ Temporary key variable
+  CheckList: TStringList;
+  sKey: string;
 
   // Logic Variables
-  HeaderString, SeizoKey, ProcName, LastRowStr: string; // ✅ NEW: LastRowStr
+  HeaderString, SeizoKey, ProcName, LastRowStr: string;
   DateMaps: TDateMapArray;
   ValueToWrite, CurrentValDouble: Double;
   IsUnmanProcess: Boolean;
   CurrentValVar: OleVariant;
 
-  // ✅ Variables for Time Conversion (Minutes -> Decimal Hours)
+  // Time Conversion
   ConvRow, d, c_idx: Integer;
-  dVal, dHours, dMins: Double;
+  dVal: Double;
   sVal: string;
 
-  // --------------------------------------------------------------------------
-  // Helper: Read value from RAM (Fast)
-  // --------------------------------------------------------------------------
+  // Pre-calculation variables
+  ExistingBlockCount, NeededBlocks: Integer;
+  TemplateStartRow, TemplateEndRow: Integer;
+
+  // --- Start of nested functions ---
+  function FindNextBlockStartRow_Fast(CurRow: Integer): Integer;
+  var r: Integer; s: string;
+  begin
+    Result := 0;
+    for r := CurRow + 1 to VarArrayHighBound(DataRange, 1) do
+    begin
+      if not VarIsEmpty(DataRange[r, 2]) then
+      begin
+        s := VarToStr(DataRange[r, 2]);
+        if (s = '-') or (s = '－') then begin Result := r; Exit; end;
+      end;
+    end;
+  end;
+
   function GetVal(Row, Col: Integer): string;
   begin
     try
-      // Check bounds and empty
       if (Row <= VarArrayHighBound(DataRange, 1)) and
          (Col <= VarArrayHighBound(DataRange, 2)) and
          not VarIsEmpty(DataRange[Row, Col]) then
@@ -1124,23 +1264,6 @@ var
     end;
   end;
 
-  function YearOfDT(const ADT: TDateTime): Integer;
-  var Y, M, D: Word; begin if ADT <= 0 then Result := 0 else begin DecodeDate(ADT, Y, M, D); Result := Y; end; end;
-
-  // Find start of next block (Search in RAM)
-  function FindNextBlockStartRow_Fast(CurRow: Integer): Integer;
-  var r: Integer; s: string;
-  begin
-    Result := 0;
-    for r := CurRow + 1 to CurRow + 2000 do
-    begin
-      if r > VarArrayHighBound(DataRange, 1) then Exit;
-      s := GetVal(r, 2); // Col B
-      if (s = '-') or (s = '－') then begin Result := r; Exit; end;
-    end;
-  end;
-
-  // Find process row
   function GetProcessRow_Fast(StartR: Integer; AProc: string): Integer;
   var r: Integer; s: string;
   begin
@@ -1150,117 +1273,171 @@ var
       if r > VarArrayHighBound(DataRange, 1) then Break;
       s := GetVal(r, 2);
       if (r > StartR) and ((s = '-') or (s = '－')) then Break;
-
-      s := GetVal(r, 5); // Col E = Process Name
+      s := GetVal(r, 5);
       if SameText(s, AProc) then begin Result := r; Exit; end;
     end;
   end;
 
-  function GetDateCol(ADate: TDateTime): Integer;
-  var x: Integer;
+  function FindNextBlockStartRow_WS(CurRow: Integer): Integer;
+  var r: Integer; s: string;
   begin
     Result := 0;
-    for x := 0 to High(DateMaps) do
-      if (ADate >= DateMaps[x].StartDate) and (ADate <= DateMaps[x].EndDate) then
-      begin Result := DateMaps[x].ColIndex; Exit; end;
+    for r := CurRow + 1 to CurRow + 5000 do
+    begin
+        s := GetCellText(WS, r, 2);
+        if (s = '-') or (s = '－') then begin Result := r; Exit; end;
+    end;
   end;
-  // --------------------------------------------------------------------------
+
+  function YearOfDT(const ADT: TDateTime): Integer;
+  var Y, M, D: Word; begin if ADT <= 0 then Result := 0 else begin DecodeDate(ADT, Y, M, D); Result := Y; end; end;
+
+function GetDateCol(ADate: TDateTime): Integer;
+var
+  x: Integer;
+  CheckDate: TDateTime;
+  TimePart: TDateTime;
+begin
+  Result := 0;
+  // 2. ดึงเฉพาะส่วน "เวลา" ออกมาเช็ค
+  TimePart := Frac(ADate);
+  
+  // ✅ ใช้ FCutOffTime แทน
+  if (TimePart > 0) and (TimePart < FCutOffTime) then
+  begin
+    // กรณี: มีเวลา และ น้อยกว่าเวลาตัดกะ -> นับเป็น "วันก่อนหน้า"
+    CheckDate := Trunc(ADate) - 1;
+  end
+  else
+  begin
+    CheckDate := Trunc(ADate);
+  end;
+
+  for x := 0 to High(DateMaps) do
+  begin
+    if (CheckDate >= Trunc(DateMaps[x].StartDate)) and (CheckDate <= Trunc(DateMaps[x].EndDate)) then
+    begin
+      Result := DateMaps[x].ColIndex;
+      Exit; // เจอแล้ว จบฟังก์ชัน
+    end;
+  end;
+
+  for x := 0 to High(DateMaps) - 1 do
+  begin
+    // เช็คว่าอยู่ในช่องว่างระหว่าง End ของตัวนี้ กับ Start ของตัวหน้าหรือไม่
+    if (CheckDate >= Trunc(DateMaps[x].StartDate)) and (CheckDate < Trunc(DateMaps[x+1].StartDate)) then
+    begin
+      Result := DateMaps[x].ColIndex;
+      Exit; // เจอแล้ว จบฟังก์ชัน
+    end;
+  end;
+end;
+  // --- End of nested functions ---
 
 begin
   if (FWorkDataCount <= 0) then Exit;
 
-  // 1. Prepare Data (Pre-Group Data)
   SeizoList := TStringList.Create;
-  CheckList := TStringList.Create; // ✅ Create helper list
+  CheckList := TStringList.Create;
   try
-    // Set SeizoList (Main list)
-    SeizoList.Sorted := False; // ❌ Do not sort, to keep SQL order
-
-    // Set CheckList (Helper list)
-    CheckList.Sorted := True;      // ✅ Sort helper for fast search
+    SeizoList.Sorted := False;
+    CheckList.Sorted := True;
     CheckList.Duplicates := dupIgnore;
 
-    // Collect only Orders matching the selected year
     for k := 0 to FWorkDataCount - 1 do
     begin
       if YearOfDT(FWorkData[k].WorkDate) = AYear then
       begin
         sKey := Trim(FWorkData[k].SEIZONO);
-
-        // ✅ Check if this Key has been seen in CheckList
-        // If IndexOf returns -1, it means "not found yet" (first appearance from SQL)
         if CheckList.IndexOf(sKey) = -1 then
         begin
-           CheckList.Add(sKey); // Mark as seen
-
-           // Add to Main List (it will append in SQL order)
+           CheckList.Add(sKey);
            SeizoList.AddObject(sKey, TObject(k));
         end;
       end;
     end;
-
-    // Clear helper list as it's no longer needed
     CheckList.Free;
 
-    if SeizoList.Count = 0 then Exit; // No data for this year, finish task
+    if SeizoList.Count = 0 then Exit;
 
     XLApp := CreateOleObject('Excel.Application');
     try
       XLApp.DisplayAlerts := False;
       WB := XLApp.Workbooks.Open(AFileName);
-      try WS := WB.Worksheets[SHEET_NAME_JP]; except try WS := WB.Worksheets[SHEET_NAME_EN]; except WB.Close(False); raise Exception.Create('エラー: シートが見つかりません。'); end; end;
+      try
+        WS := WB.Worksheets[SHEET_NAME_JP];
+      except
+        try
+          WS := WB.Worksheets[SHEET_NAME_EN];
+        except
+          WB.Close(False);
+          raise Exception.Create('エラー: シートが見つかりません。');
+        end;
+      end;
 
+      // --- STEP 1 & 2: Count existing blocks and append if necessary ---
+      ExistingBlockCount := 0;
+      NextBlockStartRow := 5;
+      while NextBlockStartRow > 0 do
+      begin
+        Inc(ExistingBlockCount);
+        NextBlockStartRow := FindNextBlockStartRow_WS(NextBlockStartRow);
+      end;
+
+      NeededBlocks := SeizoList.Count - ExistingBlockCount;
+      if NeededBlocks > 0 then
+      begin
+        TemplateStartRow := 5;
+        TemplateEndRow := FindNextBlockStartRow_WS(TemplateStartRow);
+        if TemplateEndRow <= TemplateStartRow then
+          raise Exception.Create('Could not find a valid template block to copy.');
+
+        LastRow := WS.Cells.SpecialCells(11).Row;
+        for i := 1 to NeededBlocks do
+        begin
+          BlockStartRow := LastRow + 1;
+          WS.Range[Format('A%d:CK%d', [TemplateStartRow, TemplateEndRow - 1])].Copy(WS.Cells[BlockStartRow, 1]);
+          Application.ProcessMessages;
+          LastRow := BlockStartRow + (TemplateEndRow - TemplateStartRow) -1;
+        end;
+      end;
+
+      // --- STEP 3: Perform fast in-memory processing ---
       DateMaps := BuildDateMapping(WS, AYear);
-
-      // ======================================================================
-      // ✅ NEW Optimized Logic
-      // ======================================================================
-      LastRow := WS.Cells.SpecialCells(11).Row; // xlCellTypeLastCell
+      LastRow := WS.Cells.SpecialCells(11).Row;
       if LastRow < 5000 then LastRow := 5000;
       LastRowStr := IntToStr(LastRow);
       ColCount := 200;
 
-      // 1. Capture formulas from G-J in one block
       FormulaRange := WS.Range['G1:J' + LastRowStr].Formula;
-
-      // 2. Read all values for processing
       DataRange := WS.Range[WS.Cells[1, 1], WS.Cells[LastRow, ColCount]].Value;
-
-      // ======================================================================
 
       BlockStartRow := 5;
       CurrentSeizoIdx := 0;
 
-      // Start Block Loop
-      while (BlockStartRow > 0) and (BlockStartRow < LastRow) do
+      while (BlockStartRow > 0) and (BlockStartRow < VarArrayHighBound(DataRange, 1)) do
       begin
-        // If data runs out, break
         if CurrentSeizoIdx >= SeizoList.Count then Break;
 
-        // Write Header
         SeizoKey := SeizoList[CurrentSeizoIdx];
         RowData := FWorkData[Integer(SeizoList.Objects[CurrentSeizoIdx])];
         HeaderString := Trim(SeizoKey + #10 + RowData.HINNM1 + #10 + RowData.HINNM2);
         DataRange[BlockStartRow, 3] := HeaderString;
-        DataRange[BlockStartRow + 9,  4] := RowData.MfgClassific;
+        DataRange[BlockStartRow + 9, 4] := RowData.MfgClassific;
         DataRange[BlockStartRow + 10, 4] := RowData.DEADLINE;
         DataRange[BlockStartRow + 11, 4] := RowData.ItemCD;
 
-        // --- Loop Data to fill values (Man/Unman in minutes) into RAM ---
         for k := 0 to FWorkDataCount - 1 do
         begin
             if Trim(FWorkData[k].SEIZONO) <> SeizoKey then Continue;
             if YearOfDT(FWorkData[k].WorkDate) <> AYear then Continue;
 
             ProcName := Trim(FWorkData[k].MeduimProcess);
-
-            // Find coordinates
             TargetRow := GetProcessRow_Fast(BlockStartRow, ProcName);
             TargetCol := GetDateCol(FWorkData[k].WorkDate);
 
             if (TargetRow > 0) and (TargetCol > 0) then
             begin
-               // Original Logic: Check M suffix
                IsUnmanProcess := False;
                if (Length(ProcName) > 0) and (UpCase(ProcName[Length(ProcName)]) = 'M') then
                begin
@@ -1272,7 +1449,6 @@ begin
 
                if ValueToWrite > 0 then
                begin
-                 // Accumulate value as "minutes" first
                  try
                    CurrentValVar := DataRange[TargetRow, TargetCol];
                    if VarIsNumeric(CurrentValVar) then CurrentValDouble := CurrentValVar
@@ -1281,72 +1457,54 @@ begin
                  except
                    CurrentValDouble := 0;
                  end;
-
                  DataRange[TargetRow, TargetCol] := CurrentValDouble + ValueToWrite;
                end;
             end
             else
             begin
                if (TargetRow = 0) and (ProcName <> '') then
-                  InsertLogData('工程が見つかりません: ' + ProcName, 1);
+                  InsertLogData('「計画工程に中工程が設定されていません」' + ProcName, 1);
             end;
         end;
 
-        // ====================================================================
-        // ✅ Loop to convert values in this Block from "Minutes" to "Decimal Hours" (HH.MM)
-        // ====================================================================
         ConvRow := BlockStartRow;
         while True do
         begin
            if ConvRow > VarArrayHighBound(DataRange, 1) then Break;
-
-           // Check Block boundary (if dash found, block ends)
            sVal := GetVal(ConvRow, 2);
            if (ConvRow > BlockStartRow) and ((sVal = '-') or (sVal = '－')) then Break;
 
-           // Loop through all date columns
            for d := 0 to High(DateMaps) do
            begin
               c_idx := DateMaps[d].ColIndex;
               CurrentValVar := DataRange[ConvRow, c_idx];
-
-              // If numeric value > 0 (which is total minutes), convert
               if not VarIsEmpty(CurrentValVar) and VarIsNumeric(CurrentValVar) then
               begin
                  dVal := Double(CurrentValVar);
                  if dVal > 0 then
-                 begin
-                    // ✅ Fix formula: Divide by 60 for Decimal Hours
-                    // Example: 615 minutes / 60 = 10.25
-                    // Rounding formula 2 decimal places: Round(Value * 100) / 100
-                    DataRange[ConvRow, c_idx] := Round((dVal / 60.0) * 100) / 100.0;
-                 end;
+                    DataRange[ConvRow, c_idx] := Round(dVal * 100) / 100.0;
               end;
            end;
            Inc(ConvRow);
         end;
-        // ====================================================================
 
         Inc(CurrentSeizoIdx);
         BlockStartRow := FindNextBlockStartRow_Fast(BlockStartRow);
       end;
 
       if CurrentSeizoIdx < SeizoList.Count then
-         // [JP] Warning: Template is full
          InsertLogData('警告: テンプレートがいっぱいです。残り件数: ' + IntToStr(SeizoList.Count - CurrentSeizoIdx), 1);
 
-      // 4. Write modified values back in one block
       WS.Range[WS.Cells[1, 1], WS.Cells[LastRow, ColCount]].Value := DataRange;
-
-      // 5. (NEW) Restore formulas to G-J in one block
       WS.Range['G1:J' + LastRowStr].Formula := FormulaRange;
 
       WB.Save;
       WB.Close(False);
     finally
       try XLApp.Quit; except end;
-      XLApp := Unassigned; WB := Unassigned; WS := Unassigned;
-      DataRange := Unassigned; // Return RAM
+      XLApp := Unassigned;
+      WB := Unassigned;
+      WS := Unassigned;
     end;
   finally
     SeizoList.Free;
