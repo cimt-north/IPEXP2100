@@ -274,7 +274,7 @@ begin
   if StbBase.Panels.Count >= 4 then
   begin
     // ช่องสุดท้าย (Index 3) คือช่องเวลา
-    stbBase.Panels[3].Text := FormatDateTime('yyyy/mm/dd hh:nn:ss', Now);
+    StbBase.Panels[3].Text := FormatDateTime('dd/mm/yyyy hh:nn:ss', Now);
   end;
 end;
 
@@ -627,8 +627,6 @@ begin
 end;
 
 procedure TForm1.FormShow(Sender: TObject);
-const
-  PANEL_PADDING = 10; // ค่าความกว้างเผื่อขอบซ้าย/ขวาของ Panel ปรับเพิ่มลดได้ตามชอบ
 var
   CustomBlue: TColor;
   VerInfoSize, VerValueSize, Dummy: DWORD;
@@ -639,23 +637,18 @@ var
   WSAData: TWSAData;
   IniFile: TIniFile;
   filename, DirectDBName, User: string;
-  InfoText: string;
 begin
-  WSAStartup(MAKEWORD(2, 2), WSAData);
+WSAStartup(MAKEWORD(2, 2), WSAData);
   try
-    // เพื่อความแม่นยำในการวัดขนาด ให้แน่ใจว่า Canvas ใช้ Font เดียวกับ StatusBar
-    stbBase.Canvas.Font.Assign(stbBase.Font);
-
     // Panel 0: File Name
-    FileNameString := ExtractFileName(Application.ExeName);
+    FileNameString := '' + ExtractFileName(Application.ExeName);
     with stbBase.Panels.Add do
     begin
+      Width := 80;
       Text := FileNameString;
-      // คำนวณความกว้างจาก Text + Padding
-      Width := stbBase.Canvas.TextWidth(Text) + PANEL_PADDING; 
     end;
 
-    // Panel 1: Version Info
+    // Panel 1: Version Info (คำนวณซ้ำตาม Logic เดิมของคุณ)
     VerInfoSize := GetFileVersionInfoSize(PChar(ParamStr(0)), Dummy);
     if VerInfoSize > 0 then
     begin
@@ -683,26 +676,22 @@ begin
 
     with stbBase.Panels.Add do
     begin
+      Width := 70;
       Text := VersionString;
-      // คำนวณความกว้างจาก Text + Padding
-      Width := stbBase.Canvas.TextWidth(Text) + PANEL_PADDING;
     end;
 
     // Panel 2: Localhost / DB Info
-    filename := ExtractFilePath(Application.ExeName) + 'Setup\SetUp.Ini';
+    filename := ExtractFilePath(Application.ExeName) + '/Setup/SetUp.Ini';
     if FileExists(filename) then
     begin
         IniFile := TIniFile.Create(filename);
         try
             DirectDBName := IniFile.ReadString('Setting', 'DIRECTDBNAME', '');
             User := IniFile.ReadString('Setting', 'USERNAME', '');
-            InfoText := DirectDBName + ' : ' + User;
-            
             with stbBase.Panels.Add do
             begin
-              Text := InfoText;
-              // คำนวณความกว้างจาก Text + Padding
-              Width := stbBase.Canvas.TextWidth(Text) + PANEL_PADDING;
+              Width := 230;
+              Text := DirectDBName + ':' + User;
             end;
         finally
             IniFile.Free;
@@ -712,24 +701,19 @@ begin
     begin
         with stbBase.Panels.Add do
         begin
+          Width := 230;
           Text := 'Setup.Ini Not Found';
-          // คำนวณความกว้างจาก Text + Padding
-          Width := stbBase.Canvas.TextWidth(Text) + PANEL_PADDING;
         end;
     end;
 
     // Panel 3: Time
     with stbBase.Panels.Add do
     begin
-      // สำหรับเวลา ให้วัดจาก String จำลองที่ยาวที่สุด เพื่อไม่ให้ Panel ยืดหดตลอดเวลาตามเข็มวินาที
-      // (ถ้าคุณโชว์แค่วันที่หรือแค่เวลา ให้ปรับข้อความในนี้ให้สอดคล้องกับ Format ของคุณ)
-      Width := stbBase.Canvas.TextWidth(' 0000/00/00 00:00:00 ') + PANEL_PADDING;
+      Width := 270;
     end;
-    
     Timer1.Interval := 1000;
     Timer1.Enabled := True;
     Timer1.OnTimer := Timer1Timer;
-    
   finally
     WSACleanup;
   end;
